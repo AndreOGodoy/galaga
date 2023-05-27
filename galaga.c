@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -5,21 +6,53 @@
 #include <GLFW/glfw3.h>
 
 #define BUFF_SIZE 2048
+
+#define MAX_BULLETS 128
+
+#define MAX_ENEMIES 128
+#define ENEMIES_HEIGHT 0.07f
+#define ENEMIES_WIDTH 0.06f
+
 unsigned int VAO, VBO;
 
-float spaceshipX = 0.0f;
-float spaceshipY = 0.0f;
-float spaceshipSpeed = 0.05f;
+typedef struct {
+    float x, y;
+    int is_active;
+    float width, height;
+} Enemy;
+
+typedef struct {
+    float x, y;
+    float velocity;
+    int is_active;
+} Bullet;
+
+typedef struct {
+    float x, y;
+    float velocity;
+} Spaceship;
+
+Enemy enemies[MAX_ENEMIES];
+Bullet bullets[MAX_BULLETS];
+size_t curr_bullet = 0;
+
+Spaceship spaceship = { .x=0.0f, .y=-0.5f, .velocity=0.02f };
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_LEFT && action != GLFW_RELEASE)
-	spaceshipX -= spaceshipSpeed;
+	spaceship.x -= spaceship.velocity;
     else if (key == GLFW_KEY_RIGHT && action != GLFW_RELEASE)
-	spaceshipX += spaceshipSpeed;
+	spaceship.x += spaceship.velocity;
     else if (key == GLFW_KEY_UP && action != GLFW_RELEASE)
-	spaceshipY += spaceshipSpeed;
+	spaceship.y += spaceship.velocity;
     else if (key == GLFW_KEY_DOWN && action != GLFW_RELEASE)
-	spaceshipY -= spaceshipSpeed;
+	spaceship.y -= spaceship.velocity;
+    else if (key == GLFW_KEY_SPACE && action != GLFW_RELEASE) {
+	bullets[curr_bullet].x = spaceship.x;
+	bullets[curr_bullet].y = spaceship.y;
+	bullets[curr_bullet].is_active = 1;
+ 	curr_bullet = (curr_bullet + 1) % MAX_BULLETS;
+    }
 }
 
 int read_file(const char* file_name, char* buffer) {
@@ -136,6 +169,60 @@ void draw_spaceship(float x, float y) {
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
+void draw_enemy(Enemy enemy) {
+    float vertices[] = {
+	enemy.x -  enemy.width / 2.0, enemy.y, 0.0f,
+	enemy.x +  enemy.width / 2.0, enemy.y, 0.0f,
+	enemy.x, enemy.y - enemy.height, 0.0f,
+    };
+
+    glBindVertexArray(VAO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glBindVertexArray(VAO);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+void draw_bullet(float x, float y) {
+    float halfWidth = 0.01f;
+    float height = 0.02f;
+
+    float vertices[] = {
+	x -  halfWidth, y, 0.0f,
+	x +  halfWidth, y, 0.0f,
+	x, y - height, 0.0f,
+    };
+
+    glBindVertexArray(VAO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glBindVertexArray(VAO);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+void setup_game() {
+    for (int i = 0; i < MAX_ENEMIES; ++i) {
+	enemies[i].x = -1 + i * (0.060 + 0.15) + 0.060;
+	enemies[i].y = 0.7;
+	enemies[i].is_active = 1;
+	enemies[i].height = ENEMIES_HEIGHT;
+	enemies[i].width = ENEMIES_WIDTH;
+    }
+
+    for (int i = 0; i < MAX_BULLETS; ++i) {
+	bullets[i].is_active = 0;
+	bullets[i].velocity = 0.01f;
+    }
+}
+
 int main() {
     GLFWwindow *window;
     configure_window(&window);
@@ -147,13 +234,41 @@ int main() {
     unsigned int shader_program = glCreateProgram();
     compile_shaders(&vertex_shader, &fragment_shader, &shader_program);
 
+    setup_game();
+    glUseProgram(shader_program);
+
     glfwSetKeyCallback(window, key_callback);
     while (!glfwWindowShouldClose(window)) {
 	glClear(GL_COLOR_BUFFER_BIT);
 
-	glUseProgram(shader_program);
-	glBindVertexArray(VAO);
-	draw_spaceship(spaceshipX, spaceshipY);
+	draw_spaceship(spaceship.x, spaceship.y);
+
+	for (int i = 0; i < MAX_ENEMIES; ++i)
+	    if (enemies[i].is_active)
+		draw_enemy(enemies[i]);
+
+	for (int i = 0; i < MAX_BULLETS; ++i) {
+	    if (bullets[i].is_active) {
+		bullets[i].y += bullets[i].velocity;
+		draw_bullet(bullets[i].x, bullets[i].y);
+
+		if (bullets[i].y >= 1) {
+		    bullets[i].is_active = 0;
+		}
+
+		for (int j = 0; j < MAX_ENEMIES; ++j) {
+		    if (enemies[j].is_active) {
+			if (bullets[i].x <= enemies[j].x + enemies[j].width / 2.0 &&
+			    bullets[i].x >= enemies[j].x - enemies[j].width / 2.0 &&
+			    bullets[i].y >= enemies[j].y - enemies[j].height) {
+
+			    enemies[j].is_active = 0;
+			    bullets[i].is_active = 0;
+			}
+		    }
+		}
+	    }
+	}
 
 	glfwSwapBuffers(window);
 	glfwPollEvents();
