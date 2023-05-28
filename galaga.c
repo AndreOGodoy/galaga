@@ -25,6 +25,7 @@ typedef struct {
     float x, y;
     float velocity;
     int is_active;
+    int from_enemy;
 } Bullet;
 
 typedef struct {
@@ -34,9 +35,20 @@ typedef struct {
 
 Enemy enemies[MAX_ENEMIES];
 Bullet bullets[MAX_BULLETS];
-size_t curr_bullet = 0;
+int curr_bullet = 0;
 
-Spaceship spaceship = { .x=0.0f, .y=-0.5f, .velocity=0.02f };
+Spaceship spaceship = { .x=0.0f, .y=-0.5f, .velocity=0.04f };
+
+// TODO: Make more efficient
+int get_available_bullet() {
+    for (int i = 0; i < MAX_BULLETS; ++i) {
+	if (!bullets[i].is_active) {
+	    return i;
+	}
+    }
+
+    return -1;
+}
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_LEFT && action != GLFW_RELEASE)
@@ -48,10 +60,16 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     else if (key == GLFW_KEY_DOWN && action != GLFW_RELEASE)
 	spaceship.y -= spaceship.velocity;
     else if (key == GLFW_KEY_SPACE && action != GLFW_RELEASE) {
-	bullets[curr_bullet].x = spaceship.x;
-	bullets[curr_bullet].y = spaceship.y;
-	bullets[curr_bullet].is_active = 1;
- 	curr_bullet = (curr_bullet + 1) % MAX_BULLETS;
+	int bullet_index = get_available_bullet();
+	if (bullet_index < 0) return;
+
+	Bullet *bullet = &bullets[bullet_index];
+
+	bullet->x = spaceship.x;
+	bullet->y = spaceship.y;
+	bullet->velocity = 0.02;
+	bullet->from_enemy = 0;
+	bullet->is_active = 1;
     }
 }
 
@@ -212,14 +230,66 @@ void setup_game() {
     for (int i = 0; i < MAX_ENEMIES; ++i) {
 	enemies[i].x = -1 + i * (0.060 + 0.15) + 0.060;
 	enemies[i].y = 0.7;
-	enemies[i].is_active = 1;
 	enemies[i].height = ENEMIES_HEIGHT;
 	enemies[i].width = ENEMIES_WIDTH;
+
+	if (enemies[i].x < 1 && enemies[i].x > -1) {
+	    enemies[i].is_active = 1;
+	}
     }
 
     for (int i = 0; i < MAX_BULLETS; ++i) {
 	bullets[i].is_active = 0;
 	bullets[i].velocity = 0.01f;
+	bullets[i].from_enemy = 0;
+    }
+}
+
+void draw_enemies() {
+    for (int i = 0; i < MAX_ENEMIES; ++i)
+	if (enemies[i].is_active)
+	    draw_enemy(enemies[i]);
+}
+
+void enemy_shot(Enemy enemy) {
+    int bullet_index = get_available_bullet();
+    if (bullet_index < 0) return;
+
+    Bullet *bullet = &bullets[bullet_index];
+
+    bullet->x = enemy.x;
+    bullet->y = enemy.y;
+    bullet->is_active = 1;
+    bullet->from_enemy = 1;
+    bullet->velocity = -0.01;
+}
+
+
+void update_bullets() {
+    for (int i = 0; i < MAX_BULLETS; ++i) {
+	if (bullets[i].is_active) {
+	    bullets[i].y += bullets[i].velocity;
+	    draw_bullet(bullets[i].x, bullets[i].y);
+
+	    if (bullets[i].y >= 1 || bullets[i].y <= -1) {
+		bullets[i].is_active = 0;
+	    }
+
+	    if (bullets[i].from_enemy == 1) {
+		continue;
+	    }
+
+	    for (int j = 0; j < MAX_ENEMIES; ++j) {
+		if (enemies[j].is_active) {
+		    if (bullets[i].x <= enemies[j].x + enemies[j].width / 2.0 &&
+			bullets[i].x >= enemies[j].x - enemies[j].width / 2.0 &&
+			bullets[i].y >= enemies[j].y - enemies[j].height) {
+			enemies[j].is_active = 0;
+			bullets[i].is_active = 0;
+		    }
+		}
+	    }
+	}
     }
 }
 
@@ -238,40 +308,28 @@ int main() {
     glUseProgram(shader_program);
 
     glfwSetKeyCallback(window, key_callback);
+    unsigned ticks = 0;
     while (!glfwWindowShouldClose(window)) {
 	glClear(GL_COLOR_BUFFER_BIT);
 
 	draw_spaceship(spaceship.x, spaceship.y);
+	draw_enemies();
 
-	for (int i = 0; i < MAX_ENEMIES; ++i)
-	    if (enemies[i].is_active)
-		draw_enemy(enemies[i]);
-
-	for (int i = 0; i < MAX_BULLETS; ++i) {
-	    if (bullets[i].is_active) {
-		bullets[i].y += bullets[i].velocity;
-		draw_bullet(bullets[i].x, bullets[i].y);
-
-		if (bullets[i].y >= 1) {
-		    bullets[i].is_active = 0;
-		}
-
-		for (int j = 0; j < MAX_ENEMIES; ++j) {
-		    if (enemies[j].is_active) {
-			if (bullets[i].x <= enemies[j].x + enemies[j].width / 2.0 &&
-			    bullets[i].x >= enemies[j].x - enemies[j].width / 2.0 &&
-			    bullets[i].y >= enemies[j].y - enemies[j].height) {
-
-			    enemies[j].is_active = 0;
-			    bullets[i].is_active = 0;
-			}
-		    }
+	if (ticks >= 60) {
+	    for (int i = 0; i < MAX_ENEMIES; ++i) {
+		if (enemies[i].is_active) {
+		    enemy_shot(enemies[i]);
 		}
 	    }
+
+	    ticks = 0;
 	}
+
+	update_bullets();
 
 	glfwSwapBuffers(window);
 	glfwPollEvents();
+	ticks += 1;
     }
 
     glfwTerminate();
