@@ -1,17 +1,24 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+void debug(const char* text) {
+  printf("[DEBUG] %s\n", text);
+}
+
 #define BUFF_SIZE 2048
 
-#define MAX_BULLETS 128
+#define MAX_BULLETS 512
 
-#define MAX_ENEMIES 128
+#define MAX_ENEMIES 10
 #define ENEMIES_HEIGHT 0.07f
 #define ENEMIES_WIDTH 0.06f
+
+int END_GAME = 0;
 
 unsigned int VAO, VBO;
 
@@ -23,7 +30,13 @@ typedef struct {
 } Entity;
 
 typedef struct {
+  double fire_rate;
+  double last_shoot_time;
+} Ship;
+
+typedef struct {
   Entity entity;
+  Ship ship;
 } Enemy;
 
 typedef struct {
@@ -33,55 +46,71 @@ typedef struct {
 
 typedef struct {
   Entity entity;
+  Ship ship;
 } Spaceship;
 
 Enemy enemies[MAX_ENEMIES];
 Bullet bullets[MAX_BULLETS];
 int curr_bullet = 0;
 
-Spaceship spaceship = { .entity = { .x=0.0f, .y=-0.5f, .velocity=0.04f }};
+Spaceship spaceship = { .entity = { .x=0.0f, .y=-0.5f, .velocity=0.02f, .width=0.075, .height=0.075 }, .ship = { .fire_rate=0.2, .last_shoot_time=-1 } };
 
-// TODO: Make more efficient
+int next_bullet = 0;
 int get_available_bullet() {
-  for (int i = 0; i < MAX_BULLETS; ++i) {
-	if (!bullets[i].entity.is_active) {
-	  return i;
-	}
-  }
-
-  return -1;
+  int available_bullet = next_bullet;
+  next_bullet = (next_bullet + 1) % MAX_BULLETS;
+  return available_bullet;
 }
 
 int check_collision(Entity *a, Entity *b) {
   return
-	a->x <= b->x + b->width / 2.0f &&
-    a->x >= b->x - b->width / 2.0f &&
-    a->y >= b->y - b->height / 2.0f &&
-	a->y >= b->y + b->height / 2.0f;
+    a->x + a->width / 2.0f >= b->x - b->width / 2.0f &&
+    a->x - a->width / 2.0f <= b->x + b->width / 2.0f &&
+    a->y + a->height / 2.0f >= b->y - b->height / 2.0f &&
+    a->y - a->height / 2.0f <= b->y + b->height / 2.0f;
 }
+
+
+
+int moveLeft = 0;
+int moveRight = 0;
+int moveUp = 0;
+int moveDown = 0;
+int shoot = 0;
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-  if (key == GLFW_KEY_LEFT && action != GLFW_RELEASE)
-	spaceship.entity.x -= spaceship.entity.velocity;
-  else if (key == GLFW_KEY_RIGHT && action != GLFW_RELEASE)
-	spaceship.entity.x += spaceship.entity.velocity;
-  else if (key == GLFW_KEY_UP && action != GLFW_RELEASE)
-	spaceship.entity.y += spaceship.entity.velocity;
-  else if (key == GLFW_KEY_DOWN && action != GLFW_RELEASE)
-	spaceship.entity.y -= spaceship.entity.velocity;
-  else if (key == GLFW_KEY_SPACE && action != GLFW_RELEASE) {
-	int bullet_index = get_available_bullet();
-	if (bullet_index < 0) return;
-
-	Bullet *bullet = &bullets[bullet_index];
-
-	bullet->entity.x = spaceship.entity.x;
-	bullet->entity.y = spaceship.entity.y;
-	bullet->entity.velocity = 0.02;
-	bullet->from_enemy = 0;
-	bullet->entity.is_active = 1;
+  if (key == GLFW_KEY_LEFT) {
+    if (action == GLFW_PRESS)
+      moveLeft = 1;
+    else if (action == GLFW_RELEASE)
+      moveLeft = 0;
+  }
+  else if (key == GLFW_KEY_RIGHT) {
+    if (action == GLFW_PRESS)
+      moveRight = 1;
+    else if (action == GLFW_RELEASE)
+      moveRight = 0;
+  }
+  else if (key == GLFW_KEY_UP) {
+    if (action == GLFW_PRESS)
+      moveUp = 1;
+    else if (action == GLFW_RELEASE)
+      moveUp = 0;
+  }
+  else if (key == GLFW_KEY_DOWN) {
+    if (action == GLFW_PRESS)
+      moveDown = 1;
+    else if (action == GLFW_RELEASE)
+      moveDown = 0;
+  }
+  else if (key == GLFW_KEY_SPACE || key ==  GLFW_KEY_LEFT_CONTROL) {
+	if (action == GLFW_PRESS)
+	  shoot = 1;
+	else if (action == GLFW_RELEASE)
+	  shoot = 0;
   }
 }
+
 
 int read_file(const char* file_name, char* buffer) {
   FILE* file = fopen(file_name, "r");
@@ -170,6 +199,8 @@ void configure_window(GLFWwindow **window) {
 	exit(1);
   }
 
+  glfwSetInputMode(*window, GLFW_REPEAT, GLFW_FALSE);
+
   glGenVertexArrays(1, &VAO);
   glGenBuffers(1, &VBO);
   glViewport(0, 0, 800, 600);
@@ -177,12 +208,9 @@ void configure_window(GLFWwindow **window) {
 }
 
 void draw_spaceship(float x, float y) {
-  float halfWidth = 0.025f;  // Half of the width of the triangle
-  float height = 0.05f;     // Height of the triangle
-
   float vertices[] = {
-	x -  halfWidth, y - height, 0.0f,
-	x +  halfWidth, y - height, 0.0f,
+	x -  spaceship.entity.width / 2, y - spaceship.entity.height, 0.0f,
+	x +  spaceship.entity.width / 2, y - spaceship.entity.height, 0.0f,
 	x, y, 0.0f
   };
 
@@ -243,6 +271,9 @@ void setup_game() {
 	enemies[i].entity.height = ENEMIES_HEIGHT;
 	enemies[i].entity.width = ENEMIES_WIDTH;
 
+	enemies[i].ship.fire_rate = 1;
+	enemies[i].ship.last_shoot_time = -1;
+
 	if (enemies[i].entity.x < 1 && enemies[i].entity.x > -1) {
 	  enemies[i].entity.is_active = 1;
 	}
@@ -261,17 +292,23 @@ void draw_enemies() {
 	  draw_enemy(enemies[i]);
 }
 
-void enemy_shot(Enemy enemy) {
-  int bullet_index = get_available_bullet();
-  if (bullet_index < 0) return;
+void enemy_shot(Enemy *enemy) {
+  double curr_time = glfwGetTime();
+  double curr_shoot_delay = curr_time - enemy->ship.last_shoot_time;
 
-  Bullet *bullet = &bullets[bullet_index];
+  if (curr_shoot_delay >= enemy->ship.fire_rate) {
+	enemy->ship.last_shoot_time = curr_time;
+	int bullet_index = get_available_bullet();
+	if (bullet_index < 0) return;
 
-  bullet->entity.x = enemy.entity.x;
-  bullet->entity.y = enemy.entity.y;
-  bullet->entity.is_active = 1;
-  bullet->from_enemy = 1;
-  bullet->entity.velocity = -0.01;
+	Bullet *bullet = &bullets[bullet_index];
+
+	bullet->entity.x = enemy->entity.x;
+	bullet->entity.y = enemy->entity.y;
+	bullet->entity.is_active = 1;
+	bullet->from_enemy = 1;
+	bullet->entity.velocity = -0.01;
+  }
 }
 
 
@@ -286,20 +323,60 @@ void update_bullets() {
 	  }
 
 	  if (bullets[i].from_enemy == 1) {
+		if (check_collision(&bullets[i].entity, &spaceship.entity)) {
+		  debug("Entrou no collision");
+		  END_GAME = 1;
+		  return;
+		}
 		continue;
 	  }
 
 	  for (int j = 0; j < MAX_ENEMIES; ++j) {
 		if (enemies[j].entity.is_active) {
-		  if (bullets[i].entity.x <= enemies[j].entity.x + enemies[j].entity.width / 2.0 &&
-			  bullets[i].entity.x >= enemies[j].entity.x - enemies[j].entity.width / 2.0 &&
-			  bullets[i].entity.y >= enemies[j].entity.y - enemies[j].entity.height) {
+		  if (check_collision(&bullets[i].entity, &enemies[j].entity)) {
 			enemies[j].entity.is_active = 0;
 			bullets[i].entity.is_active = 0;
 		  }
 		}
 	  }
 	}
+  }
+}
+
+void update_enemies() {
+  for (int i = 0; i < MAX_ENEMIES; ++i) {
+	if (enemies[i].entity.is_active) {
+	  enemy_shot(&enemies[i]);
+	}
+  }
+}
+
+void handle_movement() {
+  if (moveLeft)
+    spaceship.entity.x -= spaceship.entity.velocity;
+  if (moveRight)
+    spaceship.entity.x += spaceship.entity.velocity;
+  if (moveUp)
+    spaceship.entity.y += spaceship.entity.velocity;
+  if (moveDown)
+    spaceship.entity.y -= spaceship.entity.velocity;
+
+
+  double curr_time = glfwGetTime();
+  double curr_shoot_delay = curr_time - spaceship.ship.last_shoot_time;
+  if (shoot && curr_shoot_delay >= spaceship.ship.fire_rate) {
+	int bullet_index = get_available_bullet();
+    if (bullet_index < 0) return;
+
+    Bullet* bullet = &bullets[bullet_index];
+
+    bullet->entity.x = spaceship.entity.x;
+    bullet->entity.y = spaceship.entity.y;
+    bullet->entity.velocity = 0.02;
+    bullet->from_enemy = 0;
+    bullet->entity.is_active = 1;
+
+	spaceship.ship.last_shoot_time = curr_time;
   }
 }
 
@@ -318,31 +395,26 @@ int main() {
   glUseProgram(shader_program);
 
   glfwSetKeyCallback(window, key_callback);
-  unsigned ticks = 0;
   while (!glfwWindowShouldClose(window)) {
 	glClear(GL_COLOR_BUFFER_BIT);
 
 	draw_spaceship(spaceship.entity.x, spaceship.entity.y);
 	draw_enemies();
 
-	if (ticks >= 60) {
-	  for (int i = 0; i < MAX_ENEMIES; ++i) {
-		if (enemies[i].entity.is_active) {
-		  enemy_shot(enemies[i]);
-		}
-	  }
-
-	  ticks = 0;
-	}
-
+	update_enemies();
 	update_bullets();
 
+	if (END_GAME) {
+	  break;
+	}
+
+	handle_movement();
 	glfwSwapBuffers(window);
 	glfwPollEvents();
-	ticks += 1;
   }
 
   glfwTerminate();
   return 0;
 }
+
 

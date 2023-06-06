@@ -2,6 +2,6 @@
 
 set -xe
 
-clang galaga.c glad.c -lglfw -lGL -lX11 -lpthread -lXrandr -lXi -ldl -lm -g -o hello
+clang galaga.c glad.c -lglfw -lGL -lX11 -lpthread -lXrandr -lXi -ldl -lm -O2 -o hello
 ./hello
 
