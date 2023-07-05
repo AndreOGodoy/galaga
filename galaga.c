@@ -11,15 +11,21 @@
 #include <cglm/cglm.h>
 #include <cglm/mat4.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 void debug(const char* text) {
     printf("[DEBUG] %s\n", text);
 }
 
+void setup_game();
+
 #define BUFF_SIZE 2048
 #define MAX_BULLETS 512
 
-#define MAX_ENEMIES 10
+#define MAX_ENEMIES 16 // Potencias de 2 preferencialmente
 int enemies_alive = MAX_ENEMIES;
+int max_enemies_going_down;
 
 #define ENEMIES_HEIGHT 60.0f
 #define ENEMIES_WIDTH 60.0f
@@ -29,6 +35,10 @@ int ENEMIES_CAN_SHOT = 1;
 
 unsigned int VAO, VBO;
 
+int shoot;
+double pause_start_time;
+double pause_x_cursor_pos, pause_y_cursor_pos;
+
 int screen_width, screen_height;
 
 typedef struct {
@@ -36,11 +46,13 @@ typedef struct {
     float velocity;
     int is_active;
     float width, height;
+    GLuint sprite;
 } Entity;
 
 typedef struct {
     double fire_rate;
     double last_shoot_time;
+    GLuint bullet_sprite;
 } Ship;
 
 typedef struct {
@@ -59,10 +71,14 @@ typedef struct {
 } Spaceship;
 
 Enemy enemies[MAX_ENEMIES];
+
 Bullet bullets[MAX_BULLETS];
 int curr_bullet = 0;
 
-Spaceship spaceship = { .entity = { .x=400.0f, .y=100.0f, .velocity=5.0f, .width=60.0f, .height=60.0f }, .ship = { .fire_rate=0.2, .last_shoot_time=-1 } };
+int PAUSE_GAME = 0;
+int DEBUG_MODE = 0;
+
+Spaceship spaceship = { .entity = { .x=400.0f, .y=100.0f, .velocity=5.0f, .width=50.0f, .height=50.0f }, .ship = { .fire_rate=0.7, .last_shoot_time=-1 } };
 
 int next_bullet = 0;
 int get_available_bullet() {
@@ -79,45 +95,79 @@ int check_collision(Entity *a, Entity *b) {
 	a->y - a->height / 2.0f <= b->y + b->height / 2.0f;
 }
 
-int moveLeft = 0;
-int moveRight = 0;
-int moveUp = 0;
-int moveDown = 0;
-int shoot = 0;
 
-void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    if (key == GLFW_KEY_LEFT || key == GLFW_KEY_A) {
-	if (action == GLFW_PRESS)
-	    moveLeft = 1;
-	else if (action == GLFW_RELEASE)
-	    moveLeft = 0;
-    }
-    else if (key == GLFW_KEY_RIGHT || key == GLFW_KEY_D) {
-	if (action == GLFW_PRESS)
-	    moveRight = 1;
-	else if (action == GLFW_RELEASE)
-	    moveRight = 0;
-    }
-    else if (key == GLFW_KEY_UP || key == GLFW_KEY_W) {
-	if (action == GLFW_PRESS)
-	    moveUp = 1;
-	else if (action == GLFW_RELEASE)
-	    moveUp = 0;
-    }
-    else if (key == GLFW_KEY_DOWN || key == GLFW_KEY_S) {
-	if (action == GLFW_PRESS)
-	    moveDown = 1;
-	else if (action == GLFW_RELEASE)
-	    moveDown = 0;
-    }
-    else if (key == GLFW_KEY_SPACE || key ==  GLFW_KEY_LEFT_CONTROL) {
-	if (action == GLFW_PRESS)
-	    shoot = 1;
-	else if (action == GLFW_RELEASE)
-	    shoot = 0;
+void move_cursor_to_middle(GLFWwindow *window) {
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+    // Move cursor to the middle of the window
+    glfwSetCursorPos(window, windowWidth / 2.0, windowHeight / 2.0);
+}
+
+void pause(GLFWwindow *window) {
+    PAUSE_GAME = !PAUSE_GAME;
+    if (PAUSE_GAME) {
+        // Record when the pause started
+        pause_start_time = glfwGetTime();
+	glfwGetCursorPos(window, &pause_x_cursor_pos, &pause_y_cursor_pos);
+    } else {
+        // Calculate how long the game was paused
+        double pause_duration = glfwGetTime() - pause_start_time;
+
+        // Adjust the enemies' last shoot time
+        for (int i = 0; i < MAX_ENEMIES; ++i) {
+            enemies[i].ship.last_shoot_time += pause_duration;
+        }
+
+        // Also adjust the player's last shoot time
+        spaceship.ship.last_shoot_time += pause_duration;
+	glfwSetCursorPos(window, pause_x_cursor_pos, pause_y_cursor_pos);
     }
 }
 
+void restart(GLFWwindow* window) {
+    move_cursor_to_middle(window);
+    setup_game();
+}
+
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+        glfwSetWindowShouldClose(window, 1);
+    if (key == GLFW_KEY_R && action == GLFW_PRESS)
+        restart(window);
+}
+
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
+    if (button == GLFW_MOUSE_BUTTON_LEFT && !PAUSE_GAME) {
+	if (action == GLFW_PRESS)
+	    shoot = 1;
+	else if (action == GLFW_RELEASE) {
+	    shoot = 0;
+	}
+    }
+
+    if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+        // toggle pause
+        if (action == GLFW_PRESS)
+	    pause(window);
+    }
+    if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+        // toggle debug mode
+        if (action == GLFW_PRESS) {
+            DEBUG_MODE = !DEBUG_MODE;
+            PAUSE_GAME = DEBUG_MODE;
+        }
+        if (DEBUG_MODE) {
+	}
+	//print_game_objects();
+    }
+}
+
+void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
+    if (PAUSE_GAME)
+        return;
+
+    spaceship.entity.x = xpos - spaceship.entity.width / 2.0;
+}
 
 int read_file(const char* file_name, char* buffer) {
     FILE* file = fopen(file_name, "r");
@@ -181,6 +231,36 @@ int compile_shaders(unsigned int *vertex_shader, unsigned int *fragment_shader, 
     return success;
 }
 
+GLuint load_texture(char const * path) {
+    GLuint textureID;
+    glGenTextures(1, &textureID);
+
+    int width, height, nrComponents;
+    unsigned char *data = stbi_load(path, &width, &height, &nrComponents, 4);
+    if (data) {
+        GLenum format;
+        if (nrComponents == 1) format = GL_RED;
+        else if (nrComponents == 3) format = GL_RGB;
+        else if (nrComponents == 4) format = GL_RGBA;
+
+        glBindTexture(GL_TEXTURE_2D, textureID);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);  // Add this line
+        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
+    else {
+        printf("Texture failed to load at path: %s", path);
+    }
+    stbi_image_free(data);
+    return textureID;
+}
+
+
 void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
     screen_width = width;
     screen_height = height;
@@ -208,6 +288,9 @@ void configure_window(GLFWwindow **window) {
 	exit(1);
     }
 
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     glfwSetInputMode(*window, GLFW_REPEAT, GLFW_FALSE);
 
     glGenVertexArrays(1, &VAO);
@@ -217,61 +300,82 @@ void configure_window(GLFWwindow **window) {
 }
 
 void draw_spaceship(float x, float y) {
+    glBindTexture(GL_TEXTURE_2D, spaceship.entity.sprite);
+
     float vertices[] = {
-	x -  spaceship.entity.width / 2, y - spaceship.entity.height, 0.0f,
-	x +  spaceship.entity.width / 2, y - spaceship.entity.height, 0.0f,
-	x, y, 0.0f
+        // positions          // texture coords
+        x - spaceship.entity.width / 2.0f, y - spaceship.entity.height / 2.0f, 0.0f, 0.0f, 1.0f,
+        x + spaceship.entity.width / 2.0f, y - spaceship.entity.height / 2.0f, 0.0f, 1.0f, 1.0f,
+        x - spaceship.entity.width / 2.0f, y + spaceship.entity.height / 2.0f, 0.0f, 0.0f, 0.0f,
+        x + spaceship.entity.width / 2.0f, y + spaceship.entity.height / 2.0f, 0.0f, 1.0f, 0.0f
     };
 
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
     glBindVertexArray(VAO);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
 void draw_enemy(Enemy enemy) {
+    glBindTexture(GL_TEXTURE_2D, enemy.entity.sprite);
+
     float vertices[] = {
-	enemy.entity.x -  enemy.entity.width / 2.0, enemy.entity.y, 0.0f,
-	enemy.entity.x +  enemy.entity.width / 2.0, enemy.entity.y, 0.0f,
-	enemy.entity.x, enemy.entity.y - enemy.entity.height, 0.0f,
+        // positions          // texture coords
+        enemy.entity.x - enemy.entity.width / 2.0f, enemy.entity.y - enemy.entity.height / 2.0f, 0.0f, 0.0f, 0.0f,
+        enemy.entity.x + enemy.entity.width / 2.0f, enemy.entity.y - enemy.entity.height / 2.0f, 0.0f, 1.0f, 0.0f,
+        enemy.entity.x - enemy.entity.width / 2.0f, enemy.entity.y + enemy.entity.height / 2.0f, 0.0f, 0.0f, 1.0f,
+        enemy.entity.x + enemy.entity.width / 2.0f, enemy.entity.y + enemy.entity.height / 2.0f, 0.0f, 1.0f, 1.0f
     };
 
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
     glBindVertexArray(VAO);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
-void draw_bullet(float x, float y) {
+void draw_bullet(Bullet bullet) {
     float halfWidth = 10.0;
     float height = 10.0;
+    glBindTexture(GL_TEXTURE_2D, bullet.entity.sprite);
 
     float vertices[] = {
-	x -  halfWidth, y, 0.0f,
-	x +  halfWidth, y, 0.0f,
-	x, y - height, 0.0f,
+        // positions          // texture coords
+        bullet.entity.x - bullet.entity.width / 2.0f, bullet.entity.y - bullet.entity.height / 2.0f, 0.0f, 0.0f, 1.0f,
+        bullet.entity.x + bullet.entity.width / 2.0f, bullet.entity.y - bullet.entity.height / 2.0f, 0.0f, 1.0f, 1.0f,
+        bullet.entity.x - bullet.entity.width / 2.0f, bullet.entity.y + bullet.entity.height / 2.0f, 0.0f, 0.0f, 0.0f,
+        bullet.entity.x + bullet.entity.width / 2.0f, bullet.entity.y + bullet.entity.height / 2.0f, 0.0f, 1.0f, 0.0f
     };
 
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
     glBindVertexArray(VAO);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
+
 
 void draw_enemies() {
     for (int i = 0; i < MAX_ENEMIES; ++i)
@@ -279,17 +383,54 @@ void draw_enemies() {
 	    draw_enemy(enemies[i]);
 }
 
+void draw_background(GLFWwindow *window,  GLuint texture) {
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    GLfloat vertices[] = {
+	0.0f , 0.0f, 0.0f, 0.0f, 1.0f,  // bottom left
+        windowWidth, 0.0f, 0.0f, 1.0f, 1.0f,  // bottom right
+        0.0f, windowHeight, 0.0f, 0.0f, 0.0f,  // top left
+        windowWidth, windowHeight, 0.0f, 1.0f, 0.0f   // top right
+    };
+
+    GLuint vao, vbo;
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glBindVertexArray(vao);
+
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    glDeleteVertexArrays(1, &vao);
+    glDeleteBuffers(1, &vbo);
+}
+
 void enemy_shot(Enemy *enemy) {
     double curr_time = glfwGetTime();
     double curr_shoot_delay = curr_time - enemy->ship.last_shoot_time;
 
-    if (ENEMIES_CAN_SHOT && curr_shoot_delay >= enemy->ship.fire_rate) {
+    if (ENEMIES_CAN_SHOT && curr_shoot_delay >= enemy->ship.fire_rate && !PAUSE_GAME) {
 	enemy->ship.last_shoot_time = curr_time;
 	int bullet_index = get_available_bullet();
 	if (bullet_index < 0) return;
 
 	Bullet *bullet = &bullets[bullet_index];
 
+	bullet->entity.sprite = enemy->ship.bullet_sprite;
 	bullet->entity.x = enemy->entity.x;
 	bullet->entity.y = enemy->entity.y;
 	bullet->entity.is_active = 1;
@@ -298,12 +439,14 @@ void enemy_shot(Enemy *enemy) {
     }
 }
 
-
 void update_bullets() {
     for (int i = 0; i < MAX_BULLETS; ++i) {
 	if (bullets[i].entity.is_active) {
-	    bullets[i].entity.y += bullets[i].entity.velocity;
-	    draw_bullet(bullets[i].entity.x, bullets[i].entity.y);
+	    if (!PAUSE_GAME) {
+		bullets[i].entity.y += bullets[i].entity.velocity;
+	    }
+
+	    draw_bullet(bullets[i]);
 
 	    if (bullets[i].entity.y >= screen_height || bullets[i].entity.y <= 0) {
 		bullets[i].entity.is_active = 0;
@@ -341,16 +484,6 @@ void update_enemies() {
 }
 
 void handle_movement() {
-    if (moveLeft)
-	spaceship.entity.x -= spaceship.entity.velocity;
-    if (moveRight)
-	spaceship.entity.x += spaceship.entity.velocity;
-    if (moveUp)
-	spaceship.entity.y += spaceship.entity.velocity;
-    if (moveDown)
-	spaceship.entity.y -= spaceship.entity.velocity;
-
-
     spaceship.entity.x = fmod(spaceship.entity.x + screen_width, screen_width);
 
     double curr_time = glfwGetTime();
@@ -379,58 +512,111 @@ void create_next_phase() {
     spaceship.entity.width *= 1.15;
     spaceship.entity.velocity *= 0.95;
 
-    for (int i = 0; i < MAX_ENEMIES; ++i) {
-	enemies[i].ship.fire_rate *= 0.75;
-	enemies[i].entity.is_active = 1;
+    int num_rows = 2; // Number of rows for the enemy formation
+    int num_columns = MAX_ENEMIES / num_rows; // Number of enemies per row
+
+    float start_x = (screen_width - num_columns * ENEMIES_WIDTH * 2) / 2.0;
+    float start_y = screen_height * 0.9;
+
+    for (int row = 0; row < num_rows; ++row) {
+        for (int col = 0; col < num_columns; ++col) {
+            int index = row * num_columns + col;
+            if (index >= MAX_ENEMIES) {
+                break;
+            }
+
+            Enemy* enemy = &enemies[index];
+            enemy->entity.x = start_x + col * ENEMIES_WIDTH * 2.0;
+            enemy->entity.y = start_y - row * ENEMIES_HEIGHT;
+            enemy->entity.is_active = 1;
+            enemy->ship.fire_rate *= 0.75;
+        }
     }
 
-    float arc_radius = screen_width * 0.5; // Adjust this value to change the size of the arc
-    float arc_center_x = screen_width / 2.0;
-    float arc_center_y = screen_height * 0.25; // Adjust this value to change the vertical position of the arc
-
-    for (int i = 0; i < MAX_ENEMIES; ++i) {
-        float angle = (M_PI / MAX_ENEMIES) * i;
-        enemies[i].entity.x = arc_center_x + arc_radius * cos(angle);
-        enemies[i].entity.y = arc_center_y + arc_radius * sin(angle);
-
-        enemies[i].ship.fire_rate *= 0.75;
-        enemies[i].entity.is_active = 1;
-    }
-
+    max_enemies_going_down += 1;
     enemies_alive = MAX_ENEMIES;
     ENEMIES_CAN_SHOT = 1;
 }
 
+
+void create_enemy_type_one(Enemy *enemy) {
+    enemy->entity.velocity = 0.3;
+    enemy->ship.fire_rate = 3.0;
+    enemy->ship.last_shoot_time = 1 + rand() % 4;
+
+}
+
+void create_enemy_type_two(Enemy *enemy) {
+    enemy->entity.velocity = 0.4;
+    enemy->ship.fire_rate = 3.5;
+    enemy->ship.last_shoot_time = 1 + rand() % 4;
+}
+
+void create_enemy_type_three(Enemy *enemy) {
+    enemy->entity.velocity = 0.5;
+    enemy->ship.fire_rate = 4.5;
+    enemy->ship.last_shoot_time = 1 + rand() % 4;
+}
+
 void setup_game() {
+    spaceship.entity.sprite = load_texture("ship.png");
+
+    int half_enemies = MAX_ENEMIES / 2;
+    int quarter_enemies = MAX_ENEMIES / 4;
+    GLuint enemy1_sprite = load_texture("./enemy1.png");
+    GLuint bullet_enemy1_sprite = load_texture("./bullet_enemy1.png");
+
+    GLuint enemy2_sprite = load_texture("./enemy2.png");
+    GLuint bullet_enemy2_sprite = load_texture("./bullet_enemy2.png");
+
+    GLuint enemy3_sprite = load_texture("./enemy3.png");
+    GLuint bullet_enemy3_sprite = load_texture("./bullet_enemy3.png");
+
     for (int i = 0; i < MAX_ENEMIES; ++i) {
+	if (i < half_enemies) {
+	    create_enemy_type_one(&enemies[i]);
+	    enemies[i].entity.sprite = enemy1_sprite;
+	    enemies[i].ship.bullet_sprite = bullet_enemy1_sprite;
+	} else if (i < half_enemies + quarter_enemies) {
+	    create_enemy_type_two(&enemies[i]);
+	    enemies[i].entity.sprite = enemy2_sprite;
+	    enemies[i].ship.bullet_sprite = bullet_enemy2_sprite;
+	} else {
+	    create_enemy_type_three(&enemies[i]);
+	    enemies[i].entity.sprite = enemy3_sprite;
+	    enemies[i].ship.bullet_sprite = bullet_enemy3_sprite;
+	}
+
 	enemies[i].entity.x = (i + 0.5) * screen_width / MAX_ENEMIES;
 	enemies[i].entity.y = screen_height * 0.90f;
 	enemies[i].entity.height = ENEMIES_HEIGHT;
 	enemies[i].entity.width = ENEMIES_WIDTH;
 
-	enemies[i].ship.fire_rate = 2;
-	enemies[i].ship.last_shoot_time = -1;
-
-	/* if (enemies[i].entity.x >= 0 && enemies[i].entity.x <= screen_width) { */
-	/*     enemies[i].entity.is_active = 1; */
-	/* } */
 	enemies[i].entity.is_active = 1;
     }
 
+    max_enemies_going_down = 0;
     create_next_phase();
 
+    GLuint bullet_sprite = load_texture("bullet.png");
     for (int i = 0; i < MAX_BULLETS; ++i) {
+	bullets[i].entity.width = 40.0;
+	bullets[i].entity.height = 40.0;
+	bullets[i].entity.sprite = bullet_sprite;
 	bullets[i].entity.is_active = 0;
 	bullets[i].entity.velocity = 0.0;
 	bullets[i].from_enemy = 0;
+
     }
 }
+
 
 int main() {
     GLFWwindow *window;
     configure_window(&window);
 
-    glClearColor(13.0f/255.0f, 93.0f/255.0f, 143.0f/255.0f, 1.0f);
+    srand(time(NULL));
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
     unsigned int vertex_shader = glCreateShader(GL_VERTEX_SHADER);
     unsigned int fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
@@ -447,17 +633,23 @@ int main() {
     glUniformMatrix4fv(transform_loc, 1, GL_FALSE, &projection[0][0]);
 
     glfwSetKeyCallback(window, key_callback);
+    glfwSetMouseButtonCallback(window, mouse_button_callback);
+    glfwSetCursorPosCallback(window, cursor_position_callback);
+
     setup_game();
     int ticks = 0;
     int next_phase_countdown = 0;
+
+    GLuint background_texture = load_texture("bg.png");
     while (!glfwWindowShouldClose(window)) {
 	glClear(GL_COLOR_BUFFER_BIT);
+	draw_background(window, background_texture);
 
 	draw_spaceship(spaceship.entity.x, spaceship.entity.y);
 	draw_enemies();
-
 	update_enemies();
 	update_bullets();
+	handle_movement();
 
 	if (END_GAME) {
 	    break;
@@ -475,7 +667,6 @@ int main() {
 	    }
 	}
 
-	handle_movement();
 	glfwSwapBuffers(window);
 	glfwPollEvents();
 
