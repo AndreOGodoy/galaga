@@ -11,8 +11,8 @@
 #include <cglm/cglm.h>
 #include <cglm/mat4.h>
 
-#define WIGGLE_RADIUS 0.25  // Radius of the wiggle circle
-#define WIGGLE_SPEED 0.05  // Speed of the wiggle
+#define WIGGLE_RADIUS 0.25
+#define WIGGLE_SPEED 0.05
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -21,15 +21,19 @@ void debug(const char* text) {
     printf("[DEBUG] %s\n", text);
 }
 
+void create_next_phase();
 void setup_game();
 
 #define BUFF_SIZE 2048
 #define MAX_BULLETS 512
 
-#define MAX_ENEMIES 16 // Potencias de 2 preferencialmente
+#define MAX_ENEMIES 16
 int enemies_alive = MAX_ENEMIES;
 int max_divers = 3;
 int curr_divers = 0;
+
+int ticks = 0;
+int print_debug = 0;
 
 #define ENEMIES_HEIGHT 60.0f
 #define ENEMIES_WIDTH 60.0f
@@ -87,6 +91,37 @@ int DEBUG_MODE = 0;
 
 Spaceship spaceship = { .entity = { .x=400.0f, .y=100.0f, .velocity=5.0f, .width=50.0f, .height=50.0f }, .ship = { .fire_rate=0.5, .last_shoot_time=-1 } };
 
+void print_entities() {
+    debug("Spaceship:");
+    printf("Coord: (%.2f, %.2f)\n", spaceship.entity.x, spaceship.entity.y);
+
+    debug("Enemies:");
+    for (int i = 0; i < MAX_ENEMIES; ++i) {
+	if (enemies[i].entity.is_active) {
+	    printf("Enemy %d\n", i);
+	    printf("\tCoord: (%.2f, %.2f)\n", enemies[i].entity.x, enemies[i].entity.y);
+	    printf(
+		   "\tVelocity Vector: (%.2f, %.2f)\n",
+		   enemies[i].direction * enemies[i].entity.velocity,
+		   enemies[i].is_diving * enemies[i].entity.velocity
+	    );
+	}
+    }
+
+    debug("Bullets:");
+    for (int i = 0; i < MAX_BULLETS; ++i) {
+	if (bullets[i].entity.is_active) {
+	    printf("Bullet %d\n", i);
+	    printf("\tCoord: (%.2f, %.2f)\n", bullets[i].entity.x, bullets[i].entity.y);
+	    printf(
+		   "\tVelocity Vector: (%.2f, %.2f)\n",
+		   0.0,
+		   bullets[i].entity.velocity
+	    );
+	}
+    }
+}
+
 int next_bullet = 0;
 int get_available_bullet() {
     int available_bullet = next_bullet;
@@ -102,30 +137,24 @@ int check_collision(Entity *a, Entity *b) {
 	a->y - a->height / 2.0f <= b->y + b->height / 2.0f;
 }
 
-
 void move_cursor_to_middle(GLFWwindow *window) {
     int windowWidth, windowHeight;
     glfwGetWindowSize(window, &windowWidth, &windowHeight);
-    // Move cursor to the middle of the window
     glfwSetCursorPos(window, windowWidth / 2.0, windowHeight / 2.0);
 }
 
 void pause(GLFWwindow *window) {
     PAUSE_GAME = !PAUSE_GAME;
     if (PAUSE_GAME) {
-        // Record when the pause started
         pause_start_time = glfwGetTime();
 	glfwGetCursorPos(window, &pause_x_cursor_pos, &pause_y_cursor_pos);
     } else {
-        // Calculate how long the game was paused
         double pause_duration = glfwGetTime() - pause_start_time;
 
-        // Adjust the enemies' last shoot time
         for (int i = 0; i < MAX_ENEMIES; ++i) {
             enemies[i].ship.last_shoot_time += pause_duration;
         }
 
-        // Also adjust the player's last shoot time
         spaceship.ship.last_shoot_time += pause_duration;
 	glfwSetCursorPos(window, pause_x_cursor_pos, pause_y_cursor_pos);
     }
@@ -141,6 +170,21 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         glfwSetWindowShouldClose(window, 1);
     if (key == GLFW_KEY_R && action == GLFW_PRESS)
         restart(window);
+    if (key  == GLFW_KEY_N) {
+	enemies_alive = 0;
+    }
+    if (key == GLFW_KEY_D) {
+	if (DEBUG_MODE && action == GLFW_PRESS) {
+	    print_debug = 1;
+	    ticks = 6;
+	    pause(window);
+	}
+        else if (action == GLFW_PRESS) {
+	    print_debug = 1;
+            DEBUG_MODE = !DEBUG_MODE;
+	    pause(window);
+        }
+    }
 }
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
@@ -153,19 +197,10 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 
     if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-        // toggle pause
-        if (action == GLFW_PRESS)
-	    pause(window);
-    }
-    if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
-        // toggle debug mode
         if (action == GLFW_PRESS) {
-            DEBUG_MODE = !DEBUG_MODE;
-            PAUSE_GAME = DEBUG_MODE;
-        }
-        if (DEBUG_MODE) {
+	    DEBUG_MODE = 0;
+	    pause(window);
 	}
-	//print_game_objects();
     }
 }
 
@@ -396,10 +431,10 @@ void draw_background(GLFWwindow *window,  GLuint texture) {
     glBindTexture(GL_TEXTURE_2D, texture);
 
     GLfloat vertices[] = {
-	0.0f , 0.0f, 0.0f, 0.0f, 1.0f,  // bottom left
-        windowWidth, 0.0f, 0.0f, 1.0f, 1.0f,  // bottom right
-        0.0f, windowHeight, 0.0f, 0.0f, 0.0f,  // top left
-        windowWidth, windowHeight, 0.0f, 1.0f, 0.0f   // top right
+	0.0f , 0.0f, 0.0f, 0.0f, 1.0f,
+        windowWidth, 0.0f, 0.0f, 1.0f, 1.0f,
+        0.0f, windowHeight, 0.0f, 0.0f, 0.0f,
+        windowWidth, windowHeight, 0.0f, 1.0f, 0.0f
     };
 
     GLuint vao, vbo;
@@ -430,7 +465,11 @@ void enemy_shot(Enemy *enemy) {
     double curr_time = glfwGetTime();
     double curr_shoot_delay = curr_time - enemy->ship.last_shoot_time;
 
-    if (enemy->is_diving && ENEMIES_CAN_SHOT && curr_shoot_delay >= enemy->ship.fire_rate && !PAUSE_GAME) {
+    if (PAUSE_GAME) {
+	return;
+    }
+
+    if (enemy->is_diving && ENEMIES_CAN_SHOT && curr_shoot_delay >= enemy->ship.fire_rate) {
         enemy->ship.last_shoot_time = curr_time;
         int bullet_index = get_available_bullet();
         if (bullet_index < 0) return;
@@ -515,7 +554,7 @@ void update_enemies() {
             }
 
 	    float prob = rand() % 1000;
-            if (!enemies[i].is_diving && curr_divers < max_divers && prob <= 1) { // 1% chance per frame
+            if (!enemies[i].is_diving && curr_divers < max_divers && prob <= 1) {
                 enemies[i].is_diving = 1;
                 enemies[i].entity.velocity *= 2.5;
                 ++curr_divers;
@@ -572,6 +611,8 @@ void handle_movement() {
 }
 
 void create_next_phase() {
+    double curr_time = glfwGetTime();
+
     spaceship.entity.x = screen_width / 2.0;
     spaceship.entity.y = screen_height * 0.10;
 
@@ -601,12 +642,18 @@ void create_next_phase() {
 	    enemy->direction = 1;
 	    enemy->entity.velocity = 0.25;
             enemy->ship.fire_rate *= 0.85;
+	    enemy->ship.last_shoot_time = curr_time - rand() % 10;
         }
     }
 
+    curr_divers = 0;
     max_divers += 2;
     if (max_divers > MAX_ENEMIES) {
 	END_GAME = 1;
+    }
+
+    for (int i = 0; i < MAX_BULLETS; ++i) {
+	bullets[i].entity.is_active = 0;
     }
 
     enemies_alive = MAX_ENEMIES;
@@ -617,20 +664,16 @@ void create_next_phase() {
 void create_enemy_type_one(Enemy *enemy) {
     enemy->entity.velocity = 0.3;
     enemy->ship.fire_rate = 3.0;
-    enemy->ship.last_shoot_time = 1 + rand() % 4;
-
 }
 
 void create_enemy_type_two(Enemy *enemy) {
     enemy->entity.velocity = 0.4;
     enemy->ship.fire_rate = 3.5;
-    enemy->ship.last_shoot_time = 1 + rand() % 4;
 }
 
 void create_enemy_type_three(Enemy *enemy) {
     enemy->entity.velocity = 0.5;
     enemy->ship.fire_rate = 4.5;
-    enemy->ship.last_shoot_time = 1 + rand() % 4;
 }
 
 void setup_game() {
@@ -669,6 +712,7 @@ void setup_game() {
 	enemies[i].entity.velocity = 0.25;
 	enemies[i].is_diving = 0;
 	enemies[i].direction = 1;
+	enemies[i].ship.last_shoot_time = 1 - rand() % 10;
 
 	enemies[i].entity.is_active = 1;
     }
@@ -694,7 +738,7 @@ int main() {
     GLFWwindow *window;
     configure_window(&window);
 
-    srand(time(NULL));
+    srand((unsigned int)time(NULL));
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
     unsigned int vertex_shader = glCreateShader(GL_VERTEX_SHADER);
@@ -716,7 +760,6 @@ int main() {
     glfwSetCursorPosCallback(window, cursor_position_callback);
 
     setup_game();
-    int ticks = 0;
     int next_phase_countdown = 0;
 
     GLuint background_texture = load_texture("bg.png");
@@ -741,7 +784,7 @@ int main() {
 	    }
 
 	    else if (ticks == 0) {
-		ticks = 120;
+		ticks = 60;
 		next_phase_countdown = 1;
 	    }
 	}
@@ -751,12 +794,16 @@ int main() {
 
 	if (ticks > 0)
 	    ticks--;
+	if (print_debug == 1 && ticks == 0) {
+	    debug("DEBUG MODE");
+	    print_entities();
+	    if (!PAUSE_GAME)
+		pause(window);
+	    print_debug = 0;
+	}
     }
 
     glfwTerminate();
     return 0;
 }
-
-
-
 
