@@ -11,6 +11,9 @@
 #include <cglm/cglm.h>
 #include <cglm/mat4.h>
 
+#define WIGGLE_RADIUS 0.25  // Radius of the wiggle circle
+#define WIGGLE_SPEED 0.05  // Speed of the wiggle
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -25,7 +28,8 @@ void setup_game();
 
 #define MAX_ENEMIES 16 // Potencias de 2 preferencialmente
 int enemies_alive = MAX_ENEMIES;
-int max_enemies_going_down;
+int max_divers = 3;
+int curr_divers = 0;
 
 #define ENEMIES_HEIGHT 60.0f
 #define ENEMIES_WIDTH 60.0f
@@ -58,6 +62,9 @@ typedef struct {
 typedef struct {
     Entity entity;
     Ship ship;
+    int is_diving;
+    int direction;
+    int angle;
 } Enemy;
 
 typedef struct {
@@ -78,7 +85,7 @@ int curr_bullet = 0;
 int PAUSE_GAME = 0;
 int DEBUG_MODE = 0;
 
-Spaceship spaceship = { .entity = { .x=400.0f, .y=100.0f, .velocity=5.0f, .width=50.0f, .height=50.0f }, .ship = { .fire_rate=0.7, .last_shoot_time=-1 } };
+Spaceship spaceship = { .entity = { .x=400.0f, .y=100.0f, .velocity=5.0f, .width=50.0f, .height=50.0f }, .ship = { .fire_rate=0.5, .last_shoot_time=-1 } };
 
 int next_bullet = 0;
 int get_available_bullet() {
@@ -423,19 +430,19 @@ void enemy_shot(Enemy *enemy) {
     double curr_time = glfwGetTime();
     double curr_shoot_delay = curr_time - enemy->ship.last_shoot_time;
 
-    if (ENEMIES_CAN_SHOT && curr_shoot_delay >= enemy->ship.fire_rate && !PAUSE_GAME) {
-	enemy->ship.last_shoot_time = curr_time;
-	int bullet_index = get_available_bullet();
-	if (bullet_index < 0) return;
+    if (enemy->is_diving && ENEMIES_CAN_SHOT && curr_shoot_delay >= enemy->ship.fire_rate && !PAUSE_GAME) {
+        enemy->ship.last_shoot_time = curr_time;
+        int bullet_index = get_available_bullet();
+        if (bullet_index < 0) return;
 
-	Bullet *bullet = &bullets[bullet_index];
+        Bullet *bullet = &bullets[bullet_index];
 
-	bullet->entity.sprite = enemy->ship.bullet_sprite;
-	bullet->entity.x = enemy->entity.x;
-	bullet->entity.y = enemy->entity.y;
-	bullet->entity.is_active = 1;
-	bullet->from_enemy = 1;
-	bullet->entity.velocity = -5.0;
+        bullet->entity.sprite = enemy->ship.bullet_sprite;
+        bullet->entity.x = enemy->entity.x;
+        bullet->entity.y = enemy->entity.y;
+        bullet->entity.is_active = 1;
+        bullet->from_enemy = 1;
+        bullet->entity.velocity = -5.0;
     }
 }
 
@@ -454,7 +461,6 @@ void update_bullets() {
 
 	    if (bullets[i].from_enemy == 1) {
 		if (check_collision(&bullets[i].entity, &spaceship.entity)) {
-		    debug("Entrou no collision");
 		    END_GAME = 1;
 		    return;
 		}
@@ -476,12 +482,73 @@ void update_bullets() {
 }
 
 void update_enemies() {
+    if (PAUSE_GAME)
+	return;
+
     for (int i = 0; i < MAX_ENEMIES; ++i) {
-	if (enemies[i].entity.is_active) {
-	    enemy_shot(&enemies[i]);
+	if (enemies[i].entity.y <= 0) {
+	    END_GAME = 1;
+	    return;
 	}
+
+	if (enemies[i].is_diving && !enemies[i].entity.is_active) {
+	    enemies[i].is_diving = 0;
+	    --curr_divers;
+	}
+
+        if (enemies[i].entity.is_active) {
+	    enemies[i].entity.x += enemies[i].entity.velocity * enemies[i].direction;
+
+	    if (!enemies[i].is_diving) {
+
+		float wiggle_x = WIGGLE_RADIUS * cos(enemies[i].angle * WIGGLE_SPEED);
+		float wiggle_y = WIGGLE_RADIUS * sin(enemies[i].angle * WIGGLE_SPEED);
+
+		enemies[i].entity.x += wiggle_x;
+		enemies[i].entity.y += wiggle_y;
+
+		enemies[i].angle += 1;
+	    }
+
+            if (enemies[i].entity.x >= screen_width || enemies[i].entity.x <= 0) {
+                enemies[i].direction *= -1;
+            }
+
+	    float prob = rand() % 1000;
+            if (!enemies[i].is_diving && curr_divers < max_divers && prob <= 1) { // 1% chance per frame
+                enemies[i].is_diving = 1;
+                enemies[i].entity.velocity *= 2.5;
+                ++curr_divers;
+
+                int j = i + 1;
+                while (j < MAX_ENEMIES && enemies[j].entity.is_active && !enemies[j].is_diving && curr_divers < max_divers) {
+                    enemies[j].is_diving = 1;
+                    enemies[j].entity.velocity *= 2.5;
+                    ++curr_divers;
+                    j = (j + 1) % MAX_ENEMIES;
+                }
+            }
+
+            if (enemies[i].is_diving && enemies[i].entity.y <= 0) {
+                enemies[i].is_diving = 0;
+                enemies[i].entity.velocity /= 2;
+                enemies[i].entity.y = screen_height * 0.90f;
+                --curr_divers;
+            }
+
+            if (enemies[i].is_diving) {
+                enemies[i].entity.y -= enemies[i].entity.velocity;
+            }
+        }
+    }
+
+    for (int i = 0; i < MAX_ENEMIES; ++i) {
+        if (enemies[i].entity.is_active) {
+            enemy_shot(&enemies[i]);
+        }
     }
 }
+
 
 void handle_movement() {
     spaceship.entity.x = fmod(spaceship.entity.x + screen_width, screen_width);
@@ -512,8 +579,8 @@ void create_next_phase() {
     spaceship.entity.width *= 1.15;
     spaceship.entity.velocity *= 0.95;
 
-    int num_rows = 2; // Number of rows for the enemy formation
-    int num_columns = MAX_ENEMIES / num_rows; // Number of enemies per row
+    int num_rows = 2;
+    int num_columns = MAX_ENEMIES / num_rows;
 
     float start_x = (screen_width - num_columns * ENEMIES_WIDTH * 2) / 2.0;
     float start_y = screen_height * 0.9;
@@ -526,14 +593,22 @@ void create_next_phase() {
             }
 
             Enemy* enemy = &enemies[index];
-            enemy->entity.x = start_x + col * ENEMIES_WIDTH * 2.0;
+            enemy->entity.x = start_x + (col + 0.5) * ENEMIES_WIDTH * 2.0;
             enemy->entity.y = start_y - row * ENEMIES_HEIGHT;
             enemy->entity.is_active = 1;
-            enemy->ship.fire_rate *= 0.75;
+	    enemy->angle = 0;
+	    enemy->is_diving = 0;
+	    enemy->direction = 1;
+	    enemy->entity.velocity = 0.25;
+            enemy->ship.fire_rate *= 0.85;
         }
     }
 
-    max_enemies_going_down += 1;
+    max_divers += 2;
+    if (max_divers > MAX_ENEMIES) {
+	END_GAME = 1;
+    }
+
     enemies_alive = MAX_ENEMIES;
     ENEMIES_CAN_SHOT = 1;
 }
@@ -591,11 +666,15 @@ void setup_game() {
 	enemies[i].entity.y = screen_height * 0.90f;
 	enemies[i].entity.height = ENEMIES_HEIGHT;
 	enemies[i].entity.width = ENEMIES_WIDTH;
+	enemies[i].entity.velocity = 0.25;
+	enemies[i].is_diving = 0;
+	enemies[i].direction = 1;
 
 	enemies[i].entity.is_active = 1;
     }
 
-    max_enemies_going_down = 0;
+    max_divers = 1;
+    curr_divers = 0;
     create_next_phase();
 
     GLuint bullet_sprite = load_texture("bullet.png");
@@ -677,4 +756,7 @@ int main() {
     glfwTerminate();
     return 0;
 }
+
+
+
 
